@@ -2,10 +2,18 @@ from typing import TYPE_CHECKING
 
 from besser.agent.core.processors.processor import Processor
 from besser.agent.core.session import Session
+
+from besser.agent.exceptions.logger import logger
 from besser.agent.nlp.llm.llm_openai_api import LLMOpenAI
+
 from besser.agent.nlp.speech2text.hf_speech2text import HFSpeech2Text
 from besser.agent.nlp.speech2text.speech2text import Speech2Text
 from besser.agent.nlp.llm.llm import LLM
+
+import openai
+import io
+
+from pydub import AudioSegment
 
 if TYPE_CHECKING:
     from besser.agent.core.agent import Agent
@@ -14,7 +22,7 @@ if TYPE_CHECKING:
 class AudioLanguageDetectionProcessor(Processor):
     """The AudioLanguageDetectionProcessor returns the spoken language in a given audio message.
 
-    This processor leverages GPT 4.1 to predict the user's spoken language.
+    This processor leverages an LLM to predict the user's spoken language.
 
     Args:
         agent (Agent): The agent the processor belongs to
@@ -34,7 +42,6 @@ class AudioLanguageDetectionProcessor(Processor):
         super().__init__(agent=agent, user_messages=user_messages, agent_messages=agent_messages)
         self._llm_name: str = llm_name
         self._nlp_engine: 'NLPEngine' = agent.nlp_engine
-        self._speech2text: Speech2Text = HFSpeech2Text(self._nlp_engine)
 
     def process(self, session: Session, message: bytes) -> str:
         """Method to process a message and predict the message's language.
@@ -46,24 +53,62 @@ class AudioLanguageDetectionProcessor(Processor):
             message (str): the message to be processed
 
         Returns:
-            str: the processed message
+            str: the original message
         """
-        print(type(message), len(message))
-
         # transcribe audio bytes
-        message = self._speech2text.speech2text(message)
+        #message = self._speech2text.speech2text(message)
+        print("dfdfdmf.f.m")
+        #print("message: " + message)
 
-        print("message: " + message)
 
-        llm: LLM = self._nlp_engine._llms[self._llm_name]
+        #print("detected lang:" + detected_lang)
+        detected_lang = "lb"
+        try:
+            print("herehrehrh")
+            client = openai.OpenAI(api_key="openaikey")
 
-        prompt = (f"Identify the language the user is speaking in based on the following message: {message}. "
-                  f"Only return the ISO 639 standard language code of the "
-                  f"language you recognized the user is speaking in.")
+            # Let's say message is raw PCM (e.g., from microphone)
+            raw_audio = io.BytesIO(message)
 
-        detected_lang = llm.predict(prompt, session=session)
-        print("detected lang:" + detected_lang)
+            # You must know the raw format (channels, sample width, framerate)
+            # Here's an example: mono, 16-bit, 44.1kHz
+            audio = AudioSegment(
+                data=raw_audio.read(),
+                sample_width=2,
+                frame_rate=44100,
+                channels=1
+            )
 
-        session.set('detected_audio_language', detected_lang)
+            # Export as MP3 to send to OpenAI
+            mp3_file = io.BytesIO()
+            audio.export(mp3_file, format="mp3")
+            mp3_file.name = "audio.mp3"
+            mp3_file.seek(0)
 
-        return detected_lang
+            # Send to OpenAI
+            # right now hardcoded to use gpt-4o-mini-transcribe, as it's one of the best and fastest models for transcribing any language
+            response = client.audio.transcriptions.create(
+                model="gpt-4o-mini-transcribe",
+                file=mp3_file,
+                response_format="json"
+            )
+
+            print(".,d.y.f.,")
+            print("Response from OpenAI:", response)
+            llm: LLM = self._nlp_engine._llms[self._llm_name]
+
+
+            prompt = (f"Identify the language based on the following message: {response.text}. "
+                  f"Only return the ISO 639-1 standard language code of the "
+                  f"language you recognized.")
+
+            detected_lang = llm.predict(prompt, session=session)
+            logger.info(f"Detected language (ISO 639-1): {detected_lang}")
+            session.set('detected_audio_language', detected_lang)
+        except Exception as e:
+            print(f"Error during language detection: {e}")
+            detected_lang = "unknown"
+            session.set('detected_audio_language', detected_lang)
+
+
+        return message

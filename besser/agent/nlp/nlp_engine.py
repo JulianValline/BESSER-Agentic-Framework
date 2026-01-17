@@ -1,3 +1,4 @@
+import inspect
 import os
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Hide Tensorflow logs
@@ -22,6 +23,7 @@ from besser.agent.nlp.ner.simple_ner import SimpleNER
 from besser.agent.nlp.preprocessing.pipelines import lang_map
 from besser.agent.nlp.rag.rag import RAG
 from besser.agent.nlp.speech2text.hf_speech2text import HFSpeech2Text
+from besser.agent.nlp.speech2text.openai_speech2text import OpenAISpeech2Text
 from besser.agent.nlp.speech2text.api_speech2text import APISpeech2Text
 from besser.agent.nlp.speech2text.luxasr_speech2text import LuxASRSpeech2Text
 from besser.agent.nlp.speech2text.speech2text import Speech2Text
@@ -33,8 +35,6 @@ from besser.agent.nlp.text2speech.piper_text2speech import PiperText2Speech
 if TYPE_CHECKING:
     from besser.agent.core.agent import Agent
     from besser.agent.core.state import State
-
-import inspect
 
 
 class NLPEngine:
@@ -51,7 +51,8 @@ class NLPEngine:
         _intent_classifiers (dict[State, IntentClassifier]): The collection of Intent Classifiers of the NLPEngine.
             There is one for each agent state (only states with transitions triggered by intent matching)
         _ner (NER or None): The NER (Named Entity Recognition) system of the NLPEngine
-        _speech2text (Speech2Text or None): The Speech-to-Text System of the NLPEngine
+        _speech2text (Speech2Text or None): The Speech-to-Text system of the NLPEngine
+        _text2speech (Text2Speech or None): The Text-to-Speech system of the NLPEngine
     """
 
     def __init__(self, agent: 'Agent'):
@@ -91,6 +92,8 @@ class NLPEngine:
         self._ner = SimpleNER(self, self._agent)
         if self.get_property(nlp.NLP_STT_HF_MODEL):
             self._speech2text = HFSpeech2Text(self)
+        elif self.get_property(nlp.NLP_STT_OPENAI_MODEL):
+            self._speech2text = OpenAISpeech2Text(self)
         elif self.get_property(nlp.NLP_STT_SR_ENGINE):
             self._speech2text = APISpeech2Text(self)
         elif self.get_property(nlp.NLP_STT_MIME_TYPE):
@@ -178,30 +181,38 @@ class NLPEngine:
         """Transcribe a voice audio into its corresponding text representation.
 
         Args:
-            session (): The user session
+            session (Session): The user session
             speech (bytes): the recorded voice that wants to be transcribed
 
         Returns:
             str: the speech transcription
         """
+        processed_speech = speech
         # for processing and detecting the spoken language of the audio bytes before STT is performed
         for processor in self._agent.processors:
             sig = inspect.signature(processor.process)
             params = sig.parameters
             if 'message' in params and params['message'].annotation is bytes:
                 try:
-                    ln = processor.process(session=session, message=speech)
+                    processed_speech = processor.process(session=session, message=speech)
                 except Exception as e:
                     print("Exception in processor.process:", e)
 
+
+
         # TODO: DO ONLY FOR NEXUS EVENT REMOVE BEFORE PUSHING
-        if ln == "de" or ln == "lb" or ln == "svg" or ln == "lt" or ln == "ht" or ln == "mk":
-            self._speech2text = LuxASRSpeech2Text(self)
-            print("lux if: ", type(speech), len(speech))
-        # TODO END
+        try:
+            if ln == "de" or ln == "lb" or ln == "svg" or ln == "lt" or ln == "ht" or ln == "mk":
+                self._speech2text = LuxASRSpeech2Text(self)
+                print("lux if: ", type(speech), len(speech))
+            # TODO END
+        except Exception as e:
+            print("Exception in language detection:", e)
 
         print("lux: ", type(speech), len(speech))
+
         text = self._speech2text.speech2text(speech)
+
         logger.info(f"[Speech2Text] Transcribed audio message: '{text}'")
         return text
 
